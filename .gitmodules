@@ -1,0 +1,3 @@
+[submodule "webhd/3rdparty/HDDLL"]
+	path = webhd/3rdparty/HDDLL
+	url = https://github.com/spelunky-fyi/HDDLL.git
