@@ -1,3 +1,9 @@
 [submodule "webhd/3rdparty/HDDLL"]
 	path = webhd/3rdparty/HDDLL
 	url = https://github.com/spelunky-fyi/HDDLL.git
+[submodule "webhd/3rdparty/IXWebSocket"]
+	path = webhd/3rdparty/IXWebSocket
+	url = https://github.com/machinezone/IXWebSocket.git
+[submodule "webhd/3rdparty/nlohmann_json"]
+	path = webhd/3rdparty/nlohmann_json
+	url = https://github.com/nlohmann/json.git

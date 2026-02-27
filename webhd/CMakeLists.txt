@@ -14,5 +14,12 @@ endif()
 add_library(webhd SHARED
     dllmain.cpp
     webhd.h webhd.cpp
+    net.h net.cpp
+    game_mode.h game_mode.cpp
+    ui/settings.h ui/settings.cpp
+    ui/log.h ui/log.cpp
+    ui/game_mode_browser.h ui/game_mode_browser.cpp
+    ui/toast.h ui/toast.cpp
+    game_modes/vs_chat.h game_modes/vs_chat.cpp
 )
-target_link_libraries(webhd PUBLIC hddll)
+target_link_libraries(webhd PUBLIC hddll ixwebsocket nlohmann_json::nlohmann_json)

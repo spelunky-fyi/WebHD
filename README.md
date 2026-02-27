@@ -1,14 +1,12 @@
-# Web HD
-
-Coming Soon!
+# Web HD DLL
 
 ## Building
 
 Requires CMake and Visual Studio (MSVC).
 
 ```bash
-git clone --recurse-submodules https://github.com/spelunky-fyi/WebHD.git
-cd WebHD
+git clone --recurse-submodules https://github.com/spelunky-fyi/WebHD-DLL.git
+cd WebHD-DLL
 cmake -A Win32 -S . -B build
 cmake --build build --config Release
 ```
