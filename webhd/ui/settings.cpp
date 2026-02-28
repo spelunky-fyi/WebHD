@@ -3,6 +3,10 @@
 #include <cstring>
 #include <fstream>
 
+#define WIN32_LEAN_AND_MEAN
+#include <Windows.h>
+#include <shellapi.h>
+
 #include <imgui.h>
 #include <nlohmann/json.hpp>
 
@@ -61,12 +65,17 @@ void drawSettingsWindow(bool *open, Settings &s) {
   }
 
   static bool showToken = false;
-  ImGuiInputTextFlags flags =
-      showToken ? ImGuiInputTextFlags_None : ImGuiInputTextFlags_Password;
-  changed |=
-      ImGui::InputText("API Token", s.apiToken, sizeof(s.apiToken), flags);
+  ImGuiInputTextFlags flags = showToken ? ImGuiInputTextFlags_None : ImGuiInputTextFlags_Password;
+  changed |= ImGui::InputText("API Token", s.apiToken, sizeof(s.apiToken), flags);
   ImGui::SameLine();
   ImGui::Checkbox("Show", &showToken);
+  ImGui::TextColored(ImVec4(0.5f, 0.7f, 1.0f, 1.0f), "Get your token at mossranking.com/settings");
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+  }
+  if (ImGui::IsItemClicked()) {
+    ShellExecuteA(nullptr, "open", "https://mossranking.com/settings", nullptr, nullptr, SW_SHOWNORMAL);
+  }
 
   if (changed)
     saveSettings(s);

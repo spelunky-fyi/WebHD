@@ -16,6 +16,7 @@ static bool gShowSettings = false;
 static bool gShowBrowser = false;
 static bool gShowManage = false;
 static bool gShowLogs = false;
+static bool gPrivateLobby = false;
 
 // ---------------------------------------------------------------------------
 // Connection helpers
@@ -28,8 +29,8 @@ static void startMode(const char *modeId) {
 
   if (!gClient)
     gClient = new WebSocketClient();
-  gClient->connect(gSettings.server, gSettings.apiToken,
-                   gActiveMode->info().id);
+  gClient->setPrivate(gPrivateLobby);
+  gClient->connect(gSettings.server, gSettings.apiToken, gActiveMode->info().id);
 }
 
 static void stopMode() {
@@ -78,17 +79,14 @@ void onFrame() {
     ImGui::Separator();
 
     if (gActiveMode) {
-      if (ImGui::BeginMenu("Manage Online")) {
-        if (ImGui::MenuItem("Stop & Disconnect")) {
-          stopMode();
-        }
-        ImGui::EndMenu();
+      if (ImGui::MenuItem("Manage Online")) {
+        gShowManage = !gShowManage;
       }
       ImGui::Separator();
       ImGui::Text("%s", gActiveMode->info().name);
     } else {
       if (ImGui::MenuItem("Play Online")) {
-        gShowBrowser = true;
+        gShowBrowser = !gShowBrowser;
       }
     }
 
@@ -97,9 +95,7 @@ void onFrame() {
     {
       const char *statusText = "";
       if (gClient && gActiveMode) {
-        statusText = gClient->isInLobby()
-                         ? "In Lobby"
-                         : connectionStateName(gClient->state());
+        statusText = gClient->isInLobby() ? "In Lobby" : connectionStateName(gClient->state());
       }
       auto username = gClient ? gClient->username() : std::string();
       float statusW = 0;
@@ -115,8 +111,7 @@ void onFrame() {
       ImGui::SameLine(ImGui::GetWindowWidth() - rightWidth);
 
       if (gClient && gActiveMode) {
-        ImVec4 col =
-            gClient->isInLobby() ? ImVec4(0, 1, 0.5f, 1) : ImVec4(1, 1, 0, 1);
+        ImVec4 col = gClient->isInLobby() ? ImVec4(0, 1, 0.5f, 1) : ImVec4(1, 1, 0, 1);
         ImGui::TextColored(col, "%s", statusText);
         if (!username.empty()) {
           ImGui::SameLine();
@@ -142,7 +137,7 @@ void onFrame() {
 
   // Game mode browser
   const char *selectedMode = nullptr;
-  ui::drawGameModeBrowser(&gShowBrowser, &selectedMode);
+  ui::drawGameModeBrowser(&gShowBrowser, &selectedMode, &gPrivateLobby);
   if (selectedMode) {
     startMode(selectedMode);
     gShowManage = true;
@@ -157,8 +152,7 @@ void onFrame() {
     ImGui::End();
 
     // If mode disconnected via drawManageUI, clean up
-    if (gClient && gClient->state() == ConnectionState::Disconnected &&
-        gActiveMode) {
+    if (gClient && gClient->state() == ConnectionState::Disconnected && gActiveMode) {
       gActiveMode.reset();
       gShowManage = false;
     }

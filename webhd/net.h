@@ -67,8 +67,19 @@ struct MemberLeftMsg {
 };
 
 using IncomingMsg =
-    std::variant<ExecuteInteraction, ViewerCountUpdate, MemberJoinedMsg,
-                 MemberLeftMsg>;
+    std::variant<ExecuteInteraction, ViewerCountUpdate, MemberJoinedMsg, MemberLeftMsg>;
+
+// ---------------------------------------------------------------------------
+// Catalog types (DLL → Server)
+// ---------------------------------------------------------------------------
+
+struct CatalogInteraction {
+  std::string id;
+  std::string name;
+  uint32_t cost = 0;
+  bool requires_coords = false;
+  bool allows_velocity = false;
+};
 
 // ---------------------------------------------------------------------------
 // Connection state
@@ -94,8 +105,7 @@ public:
   WebSocketClient();
   ~WebSocketClient();
 
-  void connect(const std::string &url, const std::string &apiKey,
-               const std::string &modeId);
+  void connect(const std::string &url, const std::string &apiKey, const std::string &modeId);
   void disconnect();
 
   ConnectionState state() const { return state_; }
@@ -103,11 +113,17 @@ public:
   std::string username() const { return username_; }
   bool isInLobby() const { return state_ == ConnectionState::InLobby; }
   std::string lastError() const { return error_; }
+  bool forceJoinAvailable() const { return force_join_available_; }
+  void forceJoinLobby();
+
+  bool isPrivate() const { return private_; }
+  void setPrivate(bool p) { private_ = p; }
 
   void sendPosition(float x, float y);
-  void sendLevelData(uint32_t width, uint32_t height,
-                     const std::vector<uint8_t> &tiles);
+  void sendLevelData(uint32_t width, uint32_t height, const std::vector<uint8_t> &tiles);
   void sendLevelClear();
+  void sendCatalog(const std::vector<CatalogInteraction> &interactions, uint32_t earnRate,
+                   uint32_t maxGain = 0);
 
   std::optional<IncomingMsg> popIncoming();
 
@@ -122,6 +138,8 @@ private:
   std::string lobby_id_;
   std::string username_;
   std::string error_;
+  bool force_join_available_ = false;
+  bool private_ = false;
   MessageQueue<IncomingMsg> incoming_;
 
   // Position throttling

@@ -19,11 +19,16 @@ struct Toast {
 
 static ImVec4 severityColor(ToastSeverity s) {
   switch (s) {
-  case ToastSeverity::Debug:   return ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
-  case ToastSeverity::Info:    return ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
-  case ToastSeverity::Success: return ImVec4(0.2f, 1.0f, 0.4f, 1.0f);
-  case ToastSeverity::Warning: return ImVec4(1.0f, 0.8f, 0.2f, 1.0f);
-  case ToastSeverity::Error:   return ImVec4(1.0f, 0.3f, 0.3f, 1.0f);
+  case ToastSeverity::Debug:
+    return ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
+  case ToastSeverity::Info:
+    return ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+  case ToastSeverity::Success:
+    return ImVec4(0.2f, 1.0f, 0.4f, 1.0f);
+  case ToastSeverity::Warning:
+    return ImVec4(1.0f, 0.8f, 0.2f, 1.0f);
+  case ToastSeverity::Error:
+    return ImVec4(1.0f, 0.3f, 0.3f, 1.0f);
   }
   return ImVec4(1, 1, 1, 1);
 }
@@ -31,8 +36,7 @@ static ImVec4 severityColor(ToastSeverity s) {
 static constexpr size_t kMaxToasts = 10;
 static std::deque<Toast> gToasts;
 
-void showToast(const std::string &text, ToastSeverity severity,
-               float lifetime) {
+void showToast(const std::string &text, ToastSeverity severity, float lifetime) {
   // Immediately remove the oldest toast when at capacity
   while (gToasts.size() >= kMaxToasts) {
     gToasts.pop_front();
@@ -51,10 +55,10 @@ void drawToasts(float deltaTime) {
   float padding = 8.0f;
   float lerpSpeed = 12.0f;
 
-  constexpr ImGuiWindowFlags kFlags =
-      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
-      ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove |
-      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize;
+  constexpr ImGuiWindowFlags kFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+                                      ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove |
+                                      ImGuiWindowFlags_NoSavedSettings |
+                                      ImGuiWindowFlags_AlwaysAutoResize;
 
   // Tick and remove expired toasts
   for (size_t i = 0; i < gToasts.size();) {

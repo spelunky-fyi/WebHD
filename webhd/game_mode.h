@@ -1,9 +1,9 @@
 #pragma once
 
+#include "net.h"
+
 #include <memory>
 #include <vector>
-
-#include "net.h"
 
 struct GameModeInfo {
   const char *id;

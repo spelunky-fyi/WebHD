@@ -1,7 +1,9 @@
 #include "net.h"
+
 #include "ui/log.h"
 
 #include <chrono>
+
 #include <ixwebsocket/IXWebSocket.h>
 #include <nlohmann/json.hpp>
 
@@ -38,8 +40,7 @@ WebSocketClient::WebSocketClient() : ws_(std::make_unique<ix::WebSocket>()) {}
 
 WebSocketClient::~WebSocketClient() { disconnect(); }
 
-void WebSocketClient::connect(const std::string &url,
-                              const std::string &apiKey,
+void WebSocketClient::connect(const std::string &url, const std::string &apiKey,
                               const std::string &modeId) {
   disconnect();
 
@@ -47,6 +48,7 @@ void WebSocketClient::connect(const std::string &url,
   mode_id_ = modeId;
   state_ = ConnectionState::Connecting;
   error_.clear();
+  force_join_available_ = false;
 
   ws_ = std::make_unique<ix::WebSocket>();
   ws_->setUrl(url);
@@ -61,8 +63,7 @@ void WebSocketClient::connect(const std::string &url,
       {
         json auth = {{"type", "Authenticate"}, {"key", api_key_}};
         auto bytes = json::to_msgpack(auth);
-        ws_->sendBinary(
-            ix::IXWebSocketSendData{(const char *)bytes.data(), bytes.size()});
+        ws_->sendBinary(ix::IXWebSocketSendData{(const char *)bytes.data(), bytes.size()});
       }
       break;
 
@@ -101,35 +102,44 @@ void WebSocketClient::disconnect() {
   username_.clear();
 }
 
+void WebSocketClient::forceJoinLobby() {
+  if (!force_join_available_ || lobby_id_.empty())
+    return;
+
+  force_join_available_ = false;
+  error_.clear();
+  state_ = ConnectionState::JoiningLobby;
+
+  ui::logInfo("Force-joining lobby...");
+  json join = {{"type", "JoinLobby"}, {"lobby_id", lobby_id_}, {"role", "Player"}, {"force", true}};
+  auto bytes = json::to_msgpack(join);
+  ws_->sendBinary(ix::IXWebSocketSendData{(const char *)bytes.data(), bytes.size()});
+}
+
 void WebSocketClient::handleMessage(const std::string &data) {
   try {
     // Decode using default json (std::map) for reading — key order doesn't
     // matter when deserializing.
-    auto msg = nlohmann::json::from_msgpack(
-        reinterpret_cast<const uint8_t *>(data.data()),
-        reinterpret_cast<const uint8_t *>(data.data()) + data.size());
+    auto msg =
+        nlohmann::json::from_msgpack(reinterpret_cast<const uint8_t *>(data.data()),
+                                     reinterpret_cast<const uint8_t *>(data.data()) + data.size());
     auto type = msg.value("type", "");
 
     if (type == "Authenticated") {
       username_ = msg.value("username", "");
       ui::logInfo("Authenticated as " + username_);
       state_ = ConnectionState::CreatingLobby;
-      json create = {
-          {"type", "CreateLobby"}, {"mode_id", mode_id_}, {"private", false}};
+      json create = {{"type", "CreateLobby"}, {"mode_id", mode_id_}, {"private", private_}};
       auto bytes = json::to_msgpack(create);
-      ws_->sendBinary(
-          ix::IXWebSocketSendData{(const char *)bytes.data(), bytes.size()});
+      ws_->sendBinary(ix::IXWebSocketSendData{(const char *)bytes.data(), bytes.size()});
 
     } else if (type == "LobbyCreated") {
       lobby_id_ = msg.value("lobby_id", "");
       ui::logInfo("Lobby created: " + lobby_id_);
       state_ = ConnectionState::JoiningLobby;
-      json join = {{"type", "JoinLobby"},
-                   {"lobby_id", lobby_id_},
-                   {"role", "Player"}};
+      json join = {{"type", "JoinLobby"}, {"lobby_id", lobby_id_}, {"role", "Player"}};
       auto bytes = json::to_msgpack(join);
-      ws_->sendBinary(
-          ix::IXWebSocketSendData{(const char *)bytes.data(), bytes.size()});
+      ws_->sendBinary(ix::IXWebSocketSendData{(const char *)bytes.data(), bytes.size()});
 
     } else if (type == "LobbyJoined") {
       ui::logInfo("Joined lobby");
@@ -146,14 +156,14 @@ void WebSocketClient::handleMessage(const std::string &data) {
           ExecuteInteraction ei;
           ei.interaction_id = inner.value("interaction_id", "");
           ei.username = inner.value("username", "");
-          if (inner.contains("x") && !inner["x"].is_null() &&
-              inner.contains("y") && !inner["y"].is_null()) {
+          if (inner.contains("x") && !inner["x"].is_null() && inner.contains("y") &&
+              !inner["y"].is_null()) {
             ei.x = inner["x"].get<float>();
             ei.y = inner["y"].get<float>();
             ei.has_coords = true;
           }
-          if (inner.contains("vx") && !inner["vx"].is_null() &&
-              inner.contains("vy") && !inner["vy"].is_null()) {
+          if (inner.contains("vx") && !inner["vx"].is_null() && inner.contains("vy") &&
+              !inner["vy"].is_null()) {
             ei.vx = inner["vx"].get<float>();
             ei.vy = inner["vy"].get<float>();
             ei.has_velocity = true;
@@ -178,12 +188,33 @@ void WebSocketClient::handleMessage(const std::string &data) {
       ml.role = msg.value("role", "");
       incoming_.push(ml);
 
-    } else if (type == "AuthFailed" || type == "Error") {
-      error_ = msg.value("message", msg.value("reason", "Unknown error"));
+    } else if (type == "AuthFailed") {
+      error_ = msg.value("reason", "Unknown error");
       ui::logError("Server: " + error_);
       state_ = ConnectionState::Disconnected;
-      // Don't call ws_->stop() here — it deadlocks when called from callback.
-      // The disconnect will be handled by the UI or destructor.
+
+    } else if (type == "Error") {
+      auto code = msg.value("code", "");
+      auto message = msg.value("message", "Unknown error");
+
+      if (code == "already_in_lobby" && state_ == ConnectionState::JoiningLobby &&
+          !lobby_id_.empty()) {
+        // Store the error so the UI can offer a force-join option
+        error_ = "Already in this lobby from another connection";
+        ui::logError("Server: " + error_);
+        force_join_available_ = true;
+        state_ = ConnectionState::Disconnected;
+      } else if (code == "session_replaced") {
+        ui::logInfo("Session replaced by another connection");
+        state_ = ConnectionState::Disconnected;
+        lobby_id_.clear();
+      } else {
+        error_ = message;
+        ui::logError("Server: " + error_);
+        state_ = ConnectionState::Disconnected;
+        // Don't call ws_->stop() here — it deadlocks when called from callback.
+        // The disconnect will be handled by the UI or destructor.
+      }
     }
   } catch (const std::exception &e) {
     error_ = std::string("Parse error: ") + e.what();
@@ -230,16 +261,36 @@ void WebSocketClient::sendLevelClear() {
   sendGameInput(json::to_msgpack(inner));
 }
 
+void WebSocketClient::sendCatalog(const std::vector<CatalogInteraction> &interactions,
+                                  uint32_t earnRate, uint32_t maxGain) {
+  if (state_ != ConnectionState::InLobby)
+    return;
+
+  json entries = json::array();
+  for (const auto &i : interactions) {
+    entries.push_back({{"id", i.id},
+                       {"name", i.name},
+                       {"cost", i.cost},
+                       {"requires_coords", i.requires_coords},
+                       {"allows_velocity", i.allows_velocity}});
+  }
+
+  json inner = {
+      {"type", "SetCatalog"},
+      {"interactions", entries},
+      {"earn_rate", earnRate},
+      {"max_gain", maxGain},
+  };
+  sendGameInput(json::to_msgpack(inner));
+}
+
 void WebSocketClient::sendGameInput(const std::vector<uint8_t> &innerBytes) {
   json outer = {
       {"type", "GameInput"},
       {"data", json::binary_t(innerBytes)},
   };
   auto bytes = json::to_msgpack(outer);
-  ws_->sendBinary(
-      ix::IXWebSocketSendData{(const char *)bytes.data(), bytes.size()});
+  ws_->sendBinary(ix::IXWebSocketSendData{(const char *)bytes.data(), bytes.size()});
 }
 
-std::optional<IncomingMsg> WebSocketClient::popIncoming() {
-  return incoming_.pop();
-}
+std::optional<IncomingMsg> WebSocketClient::popIncoming() { return incoming_.pop(); }

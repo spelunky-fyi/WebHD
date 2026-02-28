@@ -6,7 +6,7 @@
 
 namespace ui {
 
-void drawGameModeBrowser(bool *open, const char **selectedModeId) {
+void drawGameModeBrowser(bool *open, const char **selectedModeId, bool *isPrivate) {
   if (!*open)
     return;
 
@@ -15,6 +15,9 @@ void drawGameModeBrowser(bool *open, const char **selectedModeId) {
     ImGui::End();
     return;
   }
+
+  ImGui::Checkbox("Private lobby", isPrivate);
+  ImGui::Separator();
 
   for (auto &mode : getAvailableGameModes()) {
     ImGui::PushID(mode.id);
@@ -36,8 +39,7 @@ void drawGameModeBrowser(bool *open, const char **selectedModeId) {
     min.y -= 4;
     max.x += 4;
     max.y += 4;
-    ImGui::GetWindowDrawList()->AddRect(
-        min, max, ImGui::GetColorU32(ImGuiCol_Border), 4.0f);
+    ImGui::GetWindowDrawList()->AddRect(min, max, ImGui::GetColorU32(ImGuiCol_Border), 4.0f);
     ImGui::Dummy(ImVec2(0, 4));
 
     ImGui::PopID();

@@ -1,4 +1,5 @@
 #include "game_mode.h"
+
 #include "game_modes/vs_chat.h"
 
 #include <cstring>

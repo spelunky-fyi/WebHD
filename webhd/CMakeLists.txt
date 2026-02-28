@@ -16,6 +16,7 @@ add_library(webhd SHARED
     webhd.h webhd.cpp
     net.h net.cpp
     game_mode.h game_mode.cpp
+    interactions.h interactions.cpp
     ui/settings.h ui/settings.cpp
     ui/log.h ui/log.cpp
     ui/game_mode_browser.h ui/game_mode_browser.cpp

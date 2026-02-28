@@ -59,15 +59,13 @@ void drawLogWindow(bool *open) {
   }
 
   ImGui::Separator();
-  ImGui::BeginChild("LogScroll", ImVec2(0, 0), false,
-                     ImGuiWindowFlags_HorizontalScrollbar);
+  ImGui::BeginChild("LogScroll", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
 
   {
     std::lock_guard<std::mutex> lock(gLogMutex);
     for (auto &entry : gLogEntries) {
       ImVec4 col = levelColor(entry.level);
-      ImGui::TextColored(col, "%-7s %s", levelLabel(entry.level),
-                         entry.text.c_str());
+      ImGui::TextColored(col, "%-7s %s", levelLabel(entry.level), entry.text.c_str());
     }
   }
 
