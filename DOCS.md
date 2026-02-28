@@ -1,6 +1,4 @@
-# Web HD
-
-Web HD is a multiplayer game server Spelunky HD. New game modes will be added over time that may facilite head-to-head, large groups, and viewer spectating and interaction with your game through a web browser. This specifically is for the DLL portion of Web HD, which hooks into your game to connect with the game server.
+**Web HD** is a multiplayer game server Spelunky HD. New game modes will be added over time that may facilite head-to-head, large groups, and viewer spectating and interaction with your game through a web browser. This specifically is for the DLL portion of Web HD, which hooks into your game to connect with the game server.
 
 ## First Time Setup
 
