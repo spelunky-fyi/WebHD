@@ -130,6 +130,15 @@ static const std::vector<CatalogDef> kCatalog = {
                  .allows_velocity = true},
         .entity_id = 122,
     },
+    {
+        .info =
+            {
+                .id = "hired_hell",
+                .name = "Hired Hell",
+                .cost = 200,
+                .requires_coords = true,
+            },
+    },
 };
 
 // ---------------------------------------------------------------------------
@@ -162,7 +171,7 @@ public:
       for (const auto &def : kCatalog) {
         interactions.push_back(def.info);
       }
-      client.sendCatalog(interactions, 1, 100);
+      client.sendCatalog(interactions, 1, 200);
       catalogSent_ = true;
     }
 
@@ -315,7 +324,8 @@ private:
     auto *ls = hddll::gGlobalState->level_state;
     size_t hash = 0;
     for (size_t i = 0; i < hddll::ENTITY_FLOORS_COUNT; i++) {
-      uint16_t t = ls->entity_floors[i] ? static_cast<uint16_t>(ls->entity_floors[i]->entity_type) : 0;
+      uint16_t t =
+          ls->entity_floors[i] ? static_cast<uint16_t>(ls->entity_floors[i]->entity_type) : 0;
       hash ^= std::hash<uint16_t>{}(t) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
     }
     return hash;
@@ -375,6 +385,29 @@ private:
       player->velocity_y = dist(rng);
       addLogEntry(ei.username + " stunned the player!");
       ui::showToast(ei.username + " stunned the player!");
+      return;
+    }
+
+    if (ei.interaction_id == "hired_hell") {
+      float x = ei.has_coords ? ei.x : player->x;
+      float y = ei.has_coords ? ei.y : player->y;
+
+      // Use the first hired-hand texture from player data, fallback to 30
+      uint32_t texId = 30;
+      if (player->player_data && player->player_data->hh_texture_id[0] != 0)
+        texId = player->player_data->hh_texture_id[0];
+
+      auto *hand = hddll::gGlobalState->SpawnHiredHand(x, y, texId);
+      auto *shield =
+          static_cast<hddll::EntityActive *>(hddll::gGlobalState->SpawnEntity(x, y, 523, true));
+
+      if (hand && shield) {
+        hand->holding_entity = shield;
+        shield->holder_entity = hand;
+      }
+
+      addLogEntry(ei.username + " unleashed Hired Hell!");
+      ui::showToast(ei.username + " unleashed Hired Hell!");
       return;
     }
 
