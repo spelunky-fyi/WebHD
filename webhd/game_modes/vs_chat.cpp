@@ -6,6 +6,7 @@
 #include "../ui/toast.h"
 
 #include <chrono>
+#include <cmath>
 #include <optional>
 #include <random>
 #include <variant>
@@ -26,7 +27,8 @@ namespace game_modes {
 
 struct CatalogDef {
   CatalogInteraction info;
-  uint32_t entity_id = 0; // 0 = handled specially (not a simple spawn)
+  uint32_t entity_id = 0;  // 0 = handled specially (not a simple spawn)
+  float player_buffer = 0; // tiles to push spawn away from player (0 = no push)
 };
 
 static const std::vector<CatalogDef> kCatalog = {
@@ -45,47 +47,51 @@ static const std::vector<CatalogDef> kCatalog = {
             {
                 .id = "spawn_snake",
                 .name = "Spawn Snake",
-                .cost = 15,
+                .cost = 20,
                 .requires_coords = true,
             },
         .entity_id = 1001,
+        .player_buffer = 2,
     },
     {
         .info =
             {
                 .id = "spawn_bat",
                 .name = "Spawn Bat",
-                .cost = 15,
+                .cost = 20,
                 .requires_coords = true,
             },
         .entity_id = 1003,
+        .player_buffer = 2,
     },
     {
         .info =
             {
                 .id = "spawn_spider",
                 .name = "Spawn Spider",
-                .cost = 25,
+                .cost = 20,
                 .requires_coords = true,
             },
         .entity_id = 1002,
+        .player_buffer = 2,
     },
     {
         .info =
             {
                 .id = "spawn_skeleton",
                 .name = "Spawn Skeleton",
-                .cost = 35,
+                .cost = 20,
                 .requires_coords = true,
             },
         .entity_id = 1012,
+        .player_buffer = 2,
     },
     {
         .info =
             {
                 .id = "web_storm",
                 .name = "Web Storm",
-                .cost = 60,
+                .cost = 50,
             },
     },
     {
@@ -93,49 +99,70 @@ static const std::vector<CatalogDef> kCatalog = {
             {
                 .id = "stun_player",
                 .name = "Stun Player",
-                .cost = 40,
+                .cost = 100,
             },
     },
     {
         .info =
             {
                 .id = "spawn_rope",
-                .name = "Gift Rope",
+                .name = "Gift Ropes",
                 .cost = 20,
                 .requires_coords = true,
             },
-        .entity_id = 108,
+        .entity_id = 500,
     },
     {
-        .info = {.id = "spawn_bomb",
-                 .name = "Spawn Bomb",
-                 .cost = 50,
-                 .requires_coords = true,
-                 .allows_velocity = true},
+        .info =
+            {
+                .id = "spawn_climbing_gloves",
+                .name = "Gift Climbing Gloves",
+                .cost = 100,
+                .requires_coords = true,
+                .allows_velocity = true,
+            },
+        .entity_id = 504,
+    },
+    {
+        .info =
+            {
+                .id = "spawn_bomb",
+                .name = "Spawn Bomb",
+                .cost = 50,
+                .requires_coords = true,
+                .allows_velocity = true,
+            },
         .entity_id = 107,
     },
     {
-        .info = {.id = "spawn_gold",
-                 .name = "Spawn Gold",
-                 .cost = 5,
-                 .requires_coords = true,
-                 .allows_velocity = true},
+        .info =
+            {
+                .id = "spawn_gold",
+                .name = "Spawn Gold",
+                .cost = 5,
+                .requires_coords = true,
+                .allows_velocity = true,
+            },
         .entity_id = 118,
     },
     {
-        .info = {.id = "spawn_arrow",
-                 .name = "Spawn Arrow",
-                 .cost = 15,
-                 .requires_coords = true,
-                 .allows_velocity = true},
+        .info =
+            {
+                .id = "spawn_arrow",
+                .name = "Spawn Arrow",
+                .cost = 50,
+                .requires_coords = true,
+                .allows_velocity = true,
+            },
         .entity_id = 122,
+        .player_buffer = 2,
     },
     {
         .info =
             {
                 .id = "hired_hell",
                 .name = "Hired Hell",
-                .cost = 200,
+                .cost = 100,
                 .requires_coords = true,
             },
     },
@@ -411,15 +438,15 @@ private:
       return;
     }
 
-    // Look up entity ID from catalog
-    uint32_t entityId = 0;
+    // Look up catalog definition
+    const CatalogDef *catDef = nullptr;
     for (const auto &def : kCatalog) {
       if (def.info.id == ei.interaction_id) {
-        entityId = def.entity_id;
+        catDef = &def;
         break;
       }
     }
-    if (entityId == 0) {
+    if (!catDef || catDef->entity_id == 0) {
       ui::logWarn("Unknown spawn interaction: " + ei.interaction_id);
       return;
     }
@@ -427,8 +454,61 @@ private:
     float x = ei.has_coords ? ei.x : player->x;
     float y = ei.has_coords ? ei.y : player->y;
 
-    auto *entity =
-        static_cast<hddll::EntityActive *>(hddll::gGlobalState->SpawnEntity(x, y, entityId, true));
+    // Push spawn away from player if a buffer is configured
+    if (catDef->player_buffer > 0 && ei.has_coords) {
+      float dx = x - player->x;
+      float dy = y - player->y;
+      float dist = std::sqrt(dx * dx + dy * dy);
+      if (dist > 0.01f) {
+        // Snap to cardinal direction: push only along the dominant axis
+        int stepX = 0, stepY = 0;
+        if (std::abs(dx) >= std::abs(dy))
+          stepX = (dx > 0) ? 1 : -1;
+        else
+          stepY = (dy > 0) ? 1 : -1;
+
+        x += stepX * catDef->player_buffer;
+        y += stepY * catDef->player_buffer;
+
+        // If the original coord targeted an open tile, try to avoid pushing
+        // into floor. Check the pushed position and up to 3 more tiles along
+        // the same direction; use the first open tile found. If all are
+        // occupied, keep the initial pushed position.
+        auto *ls = hddll::gGlobalState->level_state;
+        int origTx = (int)ei.x;
+        int origTy = (int)ei.y;
+        constexpr int w = 46;
+        constexpr int h = (int)(hddll::ENTITY_FLOORS_COUNT / 46);
+        bool origOpen = ls && origTx >= 0 && origTx < w && origTy >= 0 && origTy < h &&
+                        ls->entity_floors[(size_t)origTy * w + (size_t)origTx] == nullptr;
+
+        if (origOpen && ls) {
+          float bestX = x, bestY = y;
+          bool found = false;
+          for (int step = 0; step <= 3; step++) {
+            float cx = x + stepX * step;
+            float cy = y + stepY * step;
+            int tx = (int)cx;
+            int ty = (int)cy;
+            if (tx < 0 || tx >= w || ty < 0 || ty >= h)
+              break;
+            if (ls->entity_floors[(size_t)ty * w + (size_t)tx] == nullptr) {
+              bestX = cx;
+              bestY = cy;
+              found = true;
+              break;
+            }
+          }
+          if (found) {
+            x = bestX;
+            y = bestY;
+          }
+        }
+      }
+    }
+
+    auto *entity = static_cast<hddll::EntityActive *>(
+        hddll::gGlobalState->SpawnEntity(x, y, catDef->entity_id, true));
 
     if (entity && ei.has_velocity) {
       entity->velocity_x = ei.vx;
