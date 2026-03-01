@@ -193,12 +193,7 @@ public:
 
     // Send the interaction catalog once after joining
     if (!catalogSent_) {
-      std::vector<CatalogInteraction> interactions;
-      interactions.reserve(kCatalog.size());
-      for (const auto &def : kCatalog) {
-        interactions.push_back(def.info);
-      }
-      client.sendCatalog(interactions, 1, 200);
+      sendCurrentCatalog(client);
       catalogSent_ = true;
     }
 
@@ -281,6 +276,58 @@ public:
       }
     }
 
+    // Lobby Settings
+    if (client.isInLobby() && ImGui::CollapsingHeader("Lobby Settings")) {
+      initOverrides();
+
+      if (ImGui::InputScalar("Earn Rate", ImGuiDataType_U32, &earnRate_))
+        settingsDirty_ = true;
+
+      if (ImGui::InputScalar("Max Gain", ImGuiDataType_U32, &maxGain_))
+        settingsDirty_ = true;
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("0 = unlimited");
+
+      ImGui::Separator();
+      ImGui::Text("Interactions");
+
+      for (size_t i = 0; i < kCatalog.size(); i++) {
+        ImGui::PushID((int)i);
+        if (ImGui::Checkbox("##enabled", &overrides_[i].enabled))
+          settingsDirty_ = true;
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(80);
+        if (ImGui::InputScalar("##cost", ImGuiDataType_U32, &overrides_[i].cost))
+          settingsDirty_ = true;
+        ImGui::SameLine();
+        ImGui::TextUnformatted(kCatalog[i].info.name.c_str());
+        ImGui::PopID();
+      }
+
+      if (ImGui::Button("Reset to Defaults")) {
+        earnRate_ = 1;
+        maxGain_ = 200;
+        for (size_t i = 0; i < kCatalog.size(); i++) {
+          overrides_[i].enabled = true;
+          overrides_[i].cost = kCatalog[i].info.cost;
+        }
+        settingsDirty_ = true;
+      }
+      ImGui::SameLine();
+      bool applyHighlight = settingsDirty_;
+      if (applyHighlight) {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.6f, 0.2f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.7f, 0.3f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.1f, 0.5f, 0.1f, 1.0f));
+      }
+      if (ImGui::Button("Apply")) {
+        sendCurrentCatalog(client);
+        settingsDirty_ = false;
+      }
+      if (applyHighlight)
+        ImGui::PopStyleColor(3);
+    }
+
     // Event log
     if (!eventLog_.empty()) {
       ImGui::Separator();
@@ -295,13 +342,23 @@ public:
 
     // Debug interaction panel — fire interactions without a web client
     {
+      initOverrides();
       bool has_player = hddll::gGlobalState && hddll::gGlobalState->player1 != nullptr;
       bool has_level = hddll::gGlobalState && hddll::gGlobalState->level_state != nullptr;
       if (has_player && has_level && ImGui::CollapsingHeader("Debug Interactions")) {
         float maxX = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
         auto &style = ImGui::GetStyle();
+        bool needSameLine = false;
         for (size_t i = 0; i < kCatalog.size(); i++) {
+          if (!overrides_[i].enabled)
+            continue;
           const auto &def = kCatalog[i];
+          if (needSameLine) {
+            float btnWidth = ImGui::CalcTextSize(def.info.name.c_str()).x +
+                             style.FramePadding.x * 2.0f + style.ItemSpacing.x;
+            if (ImGui::GetItemRectMax().x + btnWidth < maxX)
+              ImGui::SameLine();
+          }
           if (ImGui::Button(def.info.name.c_str())) {
             ExecuteInteraction ei;
             ei.interaction_id = def.info.id;
@@ -320,12 +377,7 @@ public:
               executeInteraction(ei);
             }
           }
-          if (i + 1 < kCatalog.size()) {
-            float nextWidth = ImGui::CalcTextSize(kCatalog[i + 1].info.name.c_str()).x +
-                              style.FramePadding.x * 2.0f + style.ItemSpacing.x;
-            if (ImGui::GetItemRectMax().x + nextWidth < maxX)
-              ImGui::SameLine();
-          }
+          needSameLine = true;
         }
       }
     }
@@ -344,6 +396,39 @@ private:
   std::deque<EventLogEntry> eventLog_;
   size_t cachedFloorHash_ = 0;
   std::chrono::steady_clock::time_point lastFloorCheck_;
+
+  // Configurable catalog settings
+  uint32_t earnRate_ = 1;
+  uint32_t maxGain_ = 200;
+  struct InteractionOverride {
+    bool enabled = true;
+    uint32_t cost;
+  };
+  std::vector<InteractionOverride> overrides_;
+  bool settingsInitialized_ = false;
+  bool settingsDirty_ = false;
+
+  void initOverrides() {
+    if (settingsInitialized_)
+      return;
+    overrides_.reserve(kCatalog.size());
+    for (const auto &def : kCatalog)
+      overrides_.push_back({true, def.info.cost});
+    settingsInitialized_ = true;
+  }
+
+  void sendCurrentCatalog(WebSocketClient &client) {
+    initOverrides();
+    std::vector<CatalogInteraction> interactions;
+    for (size_t i = 0; i < kCatalog.size(); i++) {
+      if (!overrides_[i].enabled)
+        continue;
+      auto info = kCatalog[i].info;
+      info.cost = overrides_[i].cost;
+      interactions.push_back(info);
+    }
+    client.sendCatalog(interactions, earnRate_, maxGain_);
+  }
 
   size_t computeFloorHash() {
     if (!hddll::gGlobalState || !hddll::gGlobalState->level_state)
