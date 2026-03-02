@@ -3,6 +3,7 @@
 #include "../interactions.h"
 #include "../net.h"
 #include "../ui/log.h"
+#include "../ui/target_texture.h"
 #include "../ui/toast.h"
 
 #include <chrono>
@@ -17,6 +18,7 @@
 #include <hddll/hd.h>
 #include <hddll/hd_entity.h>
 #include <hddll/hddll.h>
+#include <hddll/utils.h>
 #include <imgui.h>
 
 namespace game_modes {
@@ -27,8 +29,8 @@ namespace game_modes {
 
 struct CatalogDef {
   CatalogInteraction info;
-  uint32_t entity_id = 0;  // 0 = handled specially (not a simple spawn)
-  float player_buffer = 0; // tiles to push spawn away from player (0 = no push)
+  uint32_t entity_id = 0;         // 0 = handled specially (not a simple spawn)
+  bool use_player_buffer = false; // whether the player buffer setting applies
 };
 
 static const std::vector<CatalogDef> kCatalog = {
@@ -51,7 +53,7 @@ static const std::vector<CatalogDef> kCatalog = {
                 .requires_coords = true,
             },
         .entity_id = 1001,
-        .player_buffer = 2,
+        .use_player_buffer = true,
     },
     {
         .info =
@@ -62,7 +64,7 @@ static const std::vector<CatalogDef> kCatalog = {
                 .requires_coords = true,
             },
         .entity_id = 1003,
-        .player_buffer = 2,
+        .use_player_buffer = true,
     },
     {
         .info =
@@ -73,7 +75,7 @@ static const std::vector<CatalogDef> kCatalog = {
                 .requires_coords = true,
             },
         .entity_id = 1002,
-        .player_buffer = 2,
+        .use_player_buffer = true,
     },
     {
         .info =
@@ -84,7 +86,7 @@ static const std::vector<CatalogDef> kCatalog = {
                 .requires_coords = true,
             },
         .entity_id = 1012,
-        .player_buffer = 2,
+        .use_player_buffer = true,
     },
     {
         .info =
@@ -155,7 +157,7 @@ static const std::vector<CatalogDef> kCatalog = {
                 .allows_velocity = true,
             },
         .entity_id = 122,
-        .player_buffer = 2,
+        .use_player_buffer = true,
     },
     {
         .info =
@@ -178,6 +180,12 @@ struct EventLogEntry {
 
 static constexpr size_t kMaxEventLog = 50;
 
+struct QueuedInteraction {
+  ExecuteInteraction ei;
+  float delay;   // total delay (seconds)
+  float elapsed; // accumulated time
+};
+
 class VsChatMode : public GameMode {
 public:
   const GameModeInfo &info() const override {
@@ -188,6 +196,7 @@ public:
   void onFrame(WebSocketClient &client) override {
     if (!client.isInLobby()) {
       catalogSent_ = false;
+      queue_.clear();
       return;
     }
 
@@ -230,12 +239,104 @@ public:
       client.sendLevelClear();
       cachedLevel_ = 0;
       wasInLevel_ = false;
+      queue_.clear();
+    }
+
+    // --- Queue processing ---
+    float dt = ImGui::GetIO().DeltaTime;
+    bool gameRunning =
+        hddll::gGlobalState &&
+            (hddll::gGlobalState->screen_state == 0 && hddll::gGlobalState->play_state == 0) ||
+        (hddll::gGlobalState->screen_state == 22 && hddll::gGlobalState->play_state == 27);
+
+    if (gameRunning) {
+      for (size_t i = 0; i < queue_.size();) {
+        auto &q = queue_[i];
+        q.elapsed += dt;
+        if (q.elapsed >= q.delay) {
+          executeInteraction(q.ei);
+          queue_.erase(queue_.begin() + i);
+        } else {
+          ++i;
+        }
+      }
+    }
+
+    // --- Reticle rendering ---
+    int texW, texH;
+    ImTextureID targetTex = ui::getTargetTexture(&texW, &texH);
+    if (targetTex && !queue_.empty() && gameRunning) {
+      auto *drawList = ImGui::GetForegroundDrawList();
+      for (const auto &q : queue_) {
+        ImVec2 screenPos;
+        if (q.ei.has_coords) {
+          screenPos = hddll::gameToScreen({q.ei.x, q.ei.y});
+        } else if (hddll::gGlobalState && hddll::gGlobalState->player1) {
+          screenPos = hddll::gameToScreen(
+              {hddll::gGlobalState->player1->x, hddll::gGlobalState->player1->y});
+        } else {
+          continue;
+        }
+        float progress = q.elapsed / q.delay;
+
+        // Smoothstep fade in (first 15%) / fade out (last 20%)
+        float alpha;
+        if (progress < 0.15f) {
+          float t = progress / 0.15f;
+          alpha = t * t * (3.f - 2.f * t);
+        } else if (progress < 0.8f) {
+          alpha = 1.f;
+        } else {
+          float t = (progress - 0.8f) / 0.2f;
+          alpha = 1.f - t * t * (3.f - 2.f * t);
+        }
+
+        // Breathing scale pulse
+        float scale = 1.f + 0.08f * sinf(q.elapsed * 6.f);
+
+        // Size: ~1 game tile (game shows 20 tiles across screen width)
+        float tileSize = (float)hddll::gDisplayWidth / 20.f;
+        float halfSize = (tileSize * scale) / 2.f;
+
+        ImU32 col = IM_COL32(255, 255, 255, (int)(alpha * 255));
+        drawList->AddImage(targetTex, {screenPos.x - halfSize, screenPos.y - halfSize},
+                           {screenPos.x + halfSize, screenPos.y + halfSize}, {0, 0}, {1, 1}, col);
+
+        // Velocity arrow — line + arrowhead from reticle edge outward
+        if (q.ei.has_velocity && (q.ei.vx != 0.f || q.ei.vy != 0.f)) {
+          // atan2 in screen space: screen Y-down so negate vy (game Y-up)
+          float angle = atan2f(q.ei.vy, q.ei.vx);
+          float cosA = cosf(angle);
+          float sinA = sinf(angle);
+
+          float innerR = halfSize * 0.9f;
+          float outerR = halfSize * 2.0f;
+          float headLen = halfSize * 0.45f;
+          float headW = halfSize * 0.25f;
+
+          ImVec2 start = {screenPos.x + cosA * innerR, screenPos.y - sinA * innerR};
+          ImVec2 tip = {screenPos.x + cosA * outerR, screenPos.y - sinA * outerR};
+          ImVec2 headBase = {tip.x - cosA * headLen, tip.y + sinA * headLen};
+          ImVec2 wing1 = {headBase.x + sinA * headW, headBase.y + cosA * headW};
+          ImVec2 wing2 = {headBase.x - sinA * headW, headBase.y - cosA * headW};
+
+          ImU32 arrowCol = IM_COL32(255, 0, 255, (int)(alpha * 230));
+          drawList->AddLine(start, tip, arrowCol, 2.f);
+          drawList->AddTriangleFilled(tip, wing1, wing2, arrowCol);
+        }
+      }
     }
   }
 
   void handleMessage(const IncomingMsg &msg) override {
     if (auto *ei = std::get_if<ExecuteInteraction>(&msg)) {
-      executeInteraction(*ei);
+      auto adjusted = *ei;
+      applyPlayerBuffer(adjusted);
+      if (spawnWarning_ <= 0.f) {
+        executeInteraction(adjusted);
+      } else {
+        queue_.push_back({adjusted, spawnWarning_, 0.f});
+      }
     } else if (auto *vc = std::get_if<ViewerCountUpdate>(&msg)) {
       viewerCount_ = vc->count;
     } else if (auto *mj = std::get_if<MemberJoinedMsg>(&msg)) {
@@ -274,6 +375,23 @@ public:
       if (ImGui::Button("Kick existing connection & rejoin")) {
         client.forceJoinLobby();
       }
+    }
+
+    // Local Settings (not sent to server)
+    if (ImGui::CollapsingHeader("Local Settings")) {
+      ImGui::SetNextItemWidth(80);
+      ImGui::InputInt("Player Buffer", &playerBuffer_);
+      if (playerBuffer_ < 0)
+        playerBuffer_ = 0;
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Tiles to push spawns away from the player (0 = disabled)");
+
+      ImGui::SetNextItemWidth(80);
+      ImGui::InputFloat("Spawn Warning", &spawnWarning_, 0.1f, 0.5f, "%.1f");
+      if (spawnWarning_ < 0.f)
+        spawnWarning_ = 0.f;
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Seconds to show a target before spawning (0 = instant)");
     }
 
     // Lobby Settings
@@ -371,10 +489,19 @@ public:
                 ei.x = tile->first;
                 ei.y = tile->second;
                 ei.has_coords = true;
-                executeInteraction(ei);
+                applyPlayerBuffer(ei);
+                if (spawnWarning_ > 0.f) {
+                  queue_.push_back({ei, spawnWarning_, 0.f});
+                } else {
+                  executeInteraction(ei);
+                }
               }
             } else {
-              executeInteraction(ei);
+              if (spawnWarning_ > 0.f) {
+                queue_.push_back({ei, spawnWarning_, 0.f});
+              } else {
+                executeInteraction(ei);
+              }
             }
           }
           needSameLine = true;
@@ -396,6 +523,11 @@ private:
   std::deque<EventLogEntry> eventLog_;
   size_t cachedFloorHash_ = 0;
   std::chrono::steady_clock::time_point lastFloorCheck_;
+
+  // Local settings (not sent to server)
+  int playerBuffer_ = 2;
+  float spawnWarning_ = 1.0f;
+  std::vector<QueuedInteraction> queue_;
 
   // Configurable catalog settings
   uint32_t earnRate_ = 1;
@@ -447,6 +579,84 @@ private:
     eventLog_.push_back({text});
     if (eventLog_.size() > kMaxEventLog)
       eventLog_.pop_front();
+  }
+
+  // Apply player buffer push to an interaction's coordinates in-place.
+  // Must be called while the player is alive so we have a reference position.
+  void applyPlayerBuffer(ExecuteInteraction &ei) {
+    if (playerBuffer_ <= 0 || !ei.has_coords)
+      return;
+    if (!hddll::gGlobalState || !hddll::gGlobalState->player1)
+      return;
+
+    // Look up catalog definition to check use_player_buffer
+    const CatalogDef *catDef = nullptr;
+    for (const auto &def : kCatalog) {
+      if (def.info.id == ei.interaction_id) {
+        catDef = &def;
+        break;
+      }
+    }
+    if (!catDef || !catDef->use_player_buffer)
+      return;
+
+    auto *player = hddll::gGlobalState->player1;
+    float dx = ei.x - player->x;
+    float dy = ei.y - player->y;
+    float dist = std::sqrt(dx * dx + dy * dy);
+
+    // Only push if the click is within the buffer radius of the player
+    if (dist >= (float)playerBuffer_ || dist <= 0.01f)
+      return;
+
+    // Snap to cardinal direction: push only along the dominant axis
+    int stepX = 0, stepY = 0;
+    if (std::abs(dx) >= std::abs(dy))
+      stepX = (dx > 0) ? 1 : -1;
+    else
+      stepY = (dy > 0) ? 1 : -1;
+
+    // Push out to the buffer edge
+    float x = player->x + stepX * playerBuffer_;
+    float y = player->y + stepY * playerBuffer_;
+
+    // If the original coord targeted an open tile, try to avoid pushing
+    // into floor. Check the pushed position and up to 3 more tiles along
+    // the same direction; use the first open tile found. If all are
+    // occupied, keep the initial pushed position.
+    auto *ls = hddll::gGlobalState->level_state;
+    int origTx = (int)ei.x;
+    int origTy = (int)ei.y;
+    constexpr int w = 46;
+    constexpr int h = (int)(hddll::ENTITY_FLOORS_COUNT / 46);
+    bool origOpen = ls && origTx >= 0 && origTx < w && origTy >= 0 && origTy < h &&
+                    ls->entity_floors[(size_t)origTy * w + (size_t)origTx] == nullptr;
+
+    if (origOpen && ls) {
+      float bestX = x, bestY = y;
+      bool found = false;
+      for (int step = 0; step <= 3; step++) {
+        float cx = x + stepX * step;
+        float cy = y + stepY * step;
+        int tx = (int)cx;
+        int ty = (int)cy;
+        if (tx < 0 || tx >= w || ty < 0 || ty >= h)
+          break;
+        if (ls->entity_floors[(size_t)ty * w + (size_t)tx] == nullptr) {
+          bestX = cx;
+          bestY = cy;
+          found = true;
+          break;
+        }
+      }
+      if (found) {
+        x = bestX;
+        y = bestY;
+      }
+    }
+
+    ei.x = x;
+    ei.y = y;
   }
 
   std::optional<std::pair<float, float>> findOpenTileNearPlayer() {
@@ -536,61 +746,10 @@ private:
       return;
     }
 
+    // Coordinates already have player buffer applied (via applyPlayerBuffer
+    // before queuing), so use them directly.
     float x = ei.has_coords ? ei.x : player->x;
     float y = ei.has_coords ? ei.y : player->y;
-
-    // Push spawn away from player if a buffer is configured
-    if (catDef->player_buffer > 0 && ei.has_coords) {
-      float dx = x - player->x;
-      float dy = y - player->y;
-      float dist = std::sqrt(dx * dx + dy * dy);
-      if (dist > 0.01f) {
-        // Snap to cardinal direction: push only along the dominant axis
-        int stepX = 0, stepY = 0;
-        if (std::abs(dx) >= std::abs(dy))
-          stepX = (dx > 0) ? 1 : -1;
-        else
-          stepY = (dy > 0) ? 1 : -1;
-
-        x += stepX * catDef->player_buffer;
-        y += stepY * catDef->player_buffer;
-
-        // If the original coord targeted an open tile, try to avoid pushing
-        // into floor. Check the pushed position and up to 3 more tiles along
-        // the same direction; use the first open tile found. If all are
-        // occupied, keep the initial pushed position.
-        auto *ls = hddll::gGlobalState->level_state;
-        int origTx = (int)ei.x;
-        int origTy = (int)ei.y;
-        constexpr int w = 46;
-        constexpr int h = (int)(hddll::ENTITY_FLOORS_COUNT / 46);
-        bool origOpen = ls && origTx >= 0 && origTx < w && origTy >= 0 && origTy < h &&
-                        ls->entity_floors[(size_t)origTy * w + (size_t)origTx] == nullptr;
-
-        if (origOpen && ls) {
-          float bestX = x, bestY = y;
-          bool found = false;
-          for (int step = 0; step <= 3; step++) {
-            float cx = x + stepX * step;
-            float cy = y + stepY * step;
-            int tx = (int)cx;
-            int ty = (int)cy;
-            if (tx < 0 || tx >= w || ty < 0 || ty >= h)
-              break;
-            if (ls->entity_floors[(size_t)ty * w + (size_t)tx] == nullptr) {
-              bestX = cx;
-              bestY = cy;
-              found = true;
-              break;
-            }
-          }
-          if (found) {
-            x = bestX;
-            y = bestY;
-          }
-        }
-      }
-    }
 
     auto *entity = static_cast<hddll::EntityActive *>(
         hddll::gGlobalState->SpawnEntity(x, y, catDef->entity_id, true));

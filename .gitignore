@@ -33,3 +33,6 @@
 
 build
 target
+
+# Generated at CMake configure time
+webhd/ui/target_png.h

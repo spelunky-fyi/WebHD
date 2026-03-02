@@ -5,6 +5,8 @@
 #include <hddll/hd.h>
 #include <imgui.h>
 
+#include "ui/target_texture.h"
+
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -50,6 +52,7 @@ namespace hddll {
 void onInit() { loadSettings(gSettings); }
 
 void onDestroy() {
+  ui::destroyTargetTexture();
   gActiveMode.reset();
   if (gClient) {
     gClient->disconnect();
