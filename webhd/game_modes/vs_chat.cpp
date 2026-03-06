@@ -6,10 +6,12 @@
 #include "../ui/target_texture.h"
 #include "../ui/toast.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <optional>
 #include <random>
+#include <unordered_map>
 #include <variant>
 
 #define WIN32_LEAN_AND_MEAN
@@ -31,19 +33,11 @@ struct CatalogDef {
   CatalogInteraction info;
   uint32_t entity_id = 0;         // 0 = handled specially (not a simple spawn)
   bool use_player_buffer = false; // whether the player buffer setting applies
+  // Per-tag spawn weights. Tags in limit_tags but not here default to weight 1.
+  std::unordered_map<std::string, uint32_t> limit_weights;
 };
 
 static const std::vector<CatalogDef> kCatalog = {
-    {
-        .info =
-            {
-                .id = "spawn_web",
-                .name = "Spawn Web",
-                .cost = 10,
-                .requires_coords = true,
-            },
-        .entity_id = 115,
-    },
     {
         .info =
             {
@@ -51,6 +45,7 @@ static const std::vector<CatalogDef> kCatalog = {
                 .name = "Spawn Snake",
                 .cost = 20,
                 .requires_coords = true,
+                .limit_tags = {"entity"},
             },
         .entity_id = 1001,
         .use_player_buffer = true,
@@ -62,6 +57,7 @@ static const std::vector<CatalogDef> kCatalog = {
                 .name = "Spawn Bat",
                 .cost = 20,
                 .requires_coords = true,
+                .limit_tags = {"entity"},
             },
         .entity_id = 1003,
         .use_player_buffer = true,
@@ -73,6 +69,7 @@ static const std::vector<CatalogDef> kCatalog = {
                 .name = "Spawn Spider",
                 .cost = 20,
                 .requires_coords = true,
+                .limit_tags = {"entity"},
             },
         .entity_id = 1002,
         .use_player_buffer = true,
@@ -84,6 +81,7 @@ static const std::vector<CatalogDef> kCatalog = {
                 .name = "Spawn Skeleton",
                 .cost = 20,
                 .requires_coords = true,
+                .limit_tags = {"entity"},
             },
         .entity_id = 1012,
         .use_player_buffer = true,
@@ -94,7 +92,9 @@ static const std::vector<CatalogDef> kCatalog = {
                 .id = "web_storm",
                 .name = "Web Storm",
                 .cost = 50,
+                .limit_tags = {"entity"},
             },
+        .limit_weights = {{"entity", 25}},
     },
     {
         .info =
@@ -111,6 +111,7 @@ static const std::vector<CatalogDef> kCatalog = {
                 .name = "Gift Ropes",
                 .cost = 20,
                 .requires_coords = true,
+                .limit_tags = {"entity"},
             },
         .entity_id = 500,
     },
@@ -122,6 +123,7 @@ static const std::vector<CatalogDef> kCatalog = {
                 .cost = 100,
                 .requires_coords = true,
                 .allows_velocity = true,
+                .limit_tags = {"entity"},
             },
         .entity_id = 504,
     },
@@ -133,6 +135,7 @@ static const std::vector<CatalogDef> kCatalog = {
                 .cost = 50,
                 .requires_coords = true,
                 .allows_velocity = true,
+                .limit_tags = {"entity"},
             },
         .entity_id = 107,
     },
@@ -144,6 +147,7 @@ static const std::vector<CatalogDef> kCatalog = {
                 .cost = 5,
                 .requires_coords = true,
                 .allows_velocity = true,
+                .limit_tags = {"entity"},
             },
         .entity_id = 118,
     },
@@ -155,6 +159,7 @@ static const std::vector<CatalogDef> kCatalog = {
                 .cost = 50,
                 .requires_coords = true,
                 .allows_velocity = true,
+                .limit_tags = {"entity"},
             },
         .entity_id = 122,
         .use_player_buffer = true,
@@ -166,8 +171,20 @@ static const std::vector<CatalogDef> kCatalog = {
                 .name = "Hired Hell",
                 .cost = 100,
                 .requires_coords = true,
+                .limit_tags = {"entity", "hh"},
             },
+        .limit_weights = {{"entity", 2}},
     },
+};
+
+struct LimitSpec {
+  LimitDef def;       // id + name (sent over the wire)
+  uint32_t threshold; // game-side cap
+};
+
+static const std::vector<LimitSpec> kLimits = {
+    {{"entity", "Entity Limit"}, 1024},
+    {{"hh", "Hired Help Limit"}, 8},
 };
 
 // ---------------------------------------------------------------------------
@@ -197,6 +214,7 @@ public:
     if (!client.isInLobby()) {
       catalogSent_ = false;
       queue_.clear();
+      cachedLimits_.clear();
       return;
     }
 
@@ -243,6 +261,8 @@ public:
     }
 
     // --- Queue processing ---
+    ensureTagLookup();
+    frameSpawns_.clear();
     float dt = ImGui::GetIO().DeltaTime;
     bool gameRunning =
         hddll::gGlobalState &&
@@ -260,6 +280,32 @@ public:
           ++i;
         }
       }
+    }
+
+    // --- Limit monitoring ---
+    // Count queued spawns so limits reflect pending interactions too
+    if (in_level) {
+      std::unordered_map<std::string, uint32_t> queuedPerTag;
+      for (const auto &q : queue_) {
+        auto *ci = lookupInteraction(q.ei.interaction_id);
+        if (!ci)
+          continue;
+        for (const auto &[tag, weight] : ci->tag_weights)
+          queuedPerTag[tag] += weight;
+      }
+
+      bool changed = false;
+      std::vector<std::pair<std::string, bool>> updates;
+      for (const auto &spec : kLimits) {
+        uint32_t count = gameLimitCount(spec.def.id) + queuedPerTag[spec.def.id];
+        bool atLimit = count >= spec.threshold;
+        if (atLimit != cachedLimits_[spec.def.id])
+          changed = true;
+        cachedLimits_[spec.def.id] = atLimit;
+        updates.push_back({spec.def.id, atLimit});
+      }
+      if (changed)
+        client.sendLimitsUpdate(updates);
     }
 
     // --- Reticle rendering ---
@@ -529,6 +575,58 @@ private:
   float spawnWarning_ = 1.0f;
   std::vector<QueuedInteraction> queue_;
 
+  // Cached limit states for change detection
+  std::unordered_map<std::string, bool> cachedLimits_;
+
+  // Cached per-interaction tag weights (built once from kCatalog)
+  struct CachedInteraction {
+    std::unordered_map<std::string, uint32_t> tag_weights; // tag → weight
+  };
+  std::unordered_map<std::string, CachedInteraction> interactionLookup_;
+  bool lookupInit_ = false;
+
+  // Per-frame spawn counters per limit tag (game counts lag by one tick)
+  std::unordered_map<std::string, uint32_t> frameSpawns_;
+
+  void ensureTagLookup() {
+    if (lookupInit_)
+      return;
+    for (const auto &def : kCatalog) {
+      CachedInteraction ci;
+      for (const auto &tag : def.info.limit_tags) {
+        auto it = def.limit_weights.find(tag);
+        ci.tag_weights[tag] = (it != def.limit_weights.end()) ? it->second : 1;
+      }
+      interactionLookup_[def.info.id] = std::move(ci);
+    }
+    lookupInit_ = true;
+  }
+
+  const CachedInteraction *lookupInteraction(const std::string &id) {
+    auto it = interactionLookup_.find(id);
+    return it != interactionLookup_.end() ? &it->second : nullptr;
+  }
+
+  // Returns the current game-state count for a given limit tag.
+  uint32_t gameLimitCount(const std::string &tag) {
+    if (!hddll::gGlobalState)
+      return 0;
+    if (tag == "entity" && hddll::gGlobalState->entities)
+      return hddll::gGlobalState->entities->entities_active_count;
+    if (tag == "hh" && hddll::gGlobalState->player1 &&
+        hddll::gGlobalState->player1->player_data)
+      return hddll::gGlobalState->player1->player_data->hh_count;
+    return 0;
+  }
+
+  void incrementFrameSpawns(const std::string &id) {
+    auto *ci = lookupInteraction(id);
+    if (!ci)
+      return;
+    for (const auto &[tag, weight] : ci->tag_weights)
+      frameSpawns_[tag] += weight;
+  }
+
   // Configurable catalog settings
   uint32_t earnRate_ = 1;
   uint32_t maxGain_ = 200;
@@ -559,7 +657,10 @@ private:
       info.cost = overrides_[i].cost;
       interactions.push_back(info);
     }
-    client.sendCatalog(interactions, earnRate_, maxGain_);
+    std::vector<LimitDef> limitDefs;
+    for (const auto &spec : kLimits)
+      limitDefs.push_back(spec.def);
+    client.sendCatalog(interactions, earnRate_, maxGain_, limitDefs);
   }
 
   size_t computeFloorHash() {
@@ -690,8 +791,23 @@ private:
 
     auto *player = hddll::gGlobalState->player1;
 
+    // Hard enforcement: check resource limits via tags
+    auto *ci = lookupInteraction(ei.interaction_id);
+    if (ci) {
+      for (const auto &[tag, weight] : ci->tag_weights) {
+        for (const auto &spec : kLimits) {
+          if (spec.def.id == tag &&
+              (gameLimitCount(tag) + frameSpawns_[tag] + weight) > spec.threshold) {
+            ui::logWarn(spec.def.name + " reached, skipping " + ei.interaction_id);
+            return;
+          }
+        }
+      }
+    }
+
     if (ei.interaction_id == "web_storm") {
       spawnWebStorm(player->x, player->y);
+      incrementFrameSpawns(ei.interaction_id);
       addLogEntry(ei.username + " used Web Storm!");
       ui::showToast(ei.username + " used Web Storm!");
       return;
@@ -728,6 +844,7 @@ private:
         shield->holder_entity = hand;
       }
 
+      incrementFrameSpawns(ei.interaction_id);
       addLogEntry(ei.username + " unleashed Hired Hell!");
       ui::showToast(ei.username + " unleashed Hired Hell!");
       return;
@@ -758,6 +875,7 @@ private:
       entity->velocity_x = ei.vx;
       entity->velocity_y = ei.vy;
     }
+    incrementFrameSpawns(ei.interaction_id);
 
     std::string coords_str;
     if (ei.has_coords) {

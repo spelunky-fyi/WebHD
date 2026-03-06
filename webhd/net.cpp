@@ -262,7 +262,8 @@ void WebSocketClient::sendLevelClear() {
 }
 
 void WebSocketClient::sendCatalog(const std::vector<CatalogInteraction> &interactions,
-                                  uint32_t earnRate, uint32_t maxGain) {
+                                  uint32_t earnRate, uint32_t maxGain,
+                                  const std::vector<LimitDef> &limits) {
   if (state_ != ConnectionState::InLobby)
     return;
 
@@ -272,7 +273,13 @@ void WebSocketClient::sendCatalog(const std::vector<CatalogInteraction> &interac
                        {"name", i.name},
                        {"cost", i.cost},
                        {"requires_coords", i.requires_coords},
-                       {"allows_velocity", i.allows_velocity}});
+                       {"allows_velocity", i.allows_velocity},
+                       {"limit_tags", i.limit_tags}});
+  }
+
+  json limitsArr = json::array();
+  for (const auto &l : limits) {
+    limitsArr.push_back({{"id", l.id}, {"name", l.name}});
   }
 
   json inner = {
@@ -280,6 +287,24 @@ void WebSocketClient::sendCatalog(const std::vector<CatalogInteraction> &interac
       {"interactions", entries},
       {"earn_rate", earnRate},
       {"max_gain", maxGain},
+      {"limits", limitsArr},
+  };
+  sendGameInput(json::to_msgpack(inner));
+}
+
+void WebSocketClient::sendLimitsUpdate(
+    const std::vector<std::pair<std::string, bool>> &limits) {
+  if (state_ != ConnectionState::InLobby)
+    return;
+
+  json limitsArr = json::array();
+  for (const auto &[id, at_limit] : limits) {
+    limitsArr.push_back({{"id", id}, {"at_limit", at_limit}});
+  }
+
+  json inner = {
+      {"type", "LimitsUpdate"},
+      {"limits", limitsArr},
   };
   sendGameInput(json::to_msgpack(inner));
 }

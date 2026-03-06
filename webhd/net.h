@@ -79,6 +79,12 @@ struct CatalogInteraction {
   uint32_t cost = 0;
   bool requires_coords = false;
   bool allows_velocity = false;
+  std::vector<std::string> limit_tags;
+};
+
+struct LimitDef {
+  std::string id;
+  std::string name;
 };
 
 // ---------------------------------------------------------------------------
@@ -123,7 +129,8 @@ public:
   void sendLevelData(uint32_t width, uint32_t height, const std::vector<uint8_t> &tiles);
   void sendLevelClear();
   void sendCatalog(const std::vector<CatalogInteraction> &interactions, uint32_t earnRate,
-                   uint32_t maxGain = 0);
+                   uint32_t maxGain, const std::vector<LimitDef> &limits);
+  void sendLimitsUpdate(const std::vector<std::pair<std::string, bool>> &limits);
 
   std::optional<IncomingMsg> popIncoming();
 
