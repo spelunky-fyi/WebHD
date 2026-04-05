@@ -101,14 +101,16 @@ void onFrame() {
         statusText = gClient->isInLobby() ? "In Lobby" : connectionStateName(gClient->state());
       }
       auto username = gClient ? gClient->username() : std::string();
+      const auto &style = ImGui::GetStyle();
+      float itemPad = style.FramePadding.x * 2.0f + style.ItemSpacing.x;
       float statusW = 0;
       if (gClient && gActiveMode) {
-        statusW = ImGui::CalcTextSize(statusText).x + 8;
+        statusW = ImGui::CalcTextSize(statusText).x + itemPad;
         if (!username.empty())
-          statusW += ImGui::CalcTextSize(username.c_str()).x + 12;
+          statusW += ImGui::CalcTextSize(username.c_str()).x + itemPad;
       }
-      float settingsW = ImGui::CalcTextSize("Settings").x + 16;
-      float logsW = ImGui::CalcTextSize("Logs").x + 16;
+      float settingsW = ImGui::CalcTextSize("Settings").x + itemPad;
+      float logsW = ImGui::CalcTextSize("Logs").x + itemPad;
       rightWidth = statusW + settingsW + logsW;
 
       ImGui::SameLine(ImGui::GetWindowWidth() - rightWidth);
